@@ -1,33 +1,35 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { isInFallback } from '../lib/networkSimulation'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 import type { ScenarioId } from '../types'
 
 const tabs = ['Equipment', 'Control', 'Comms', 'Scenarios'] as const
 
 const scenarios: Array<{ id: ScenarioId; label: string; desc: string }> = [
   { id: 'live', label: 'Live sample', desc: 'Default demo queues' },
-  { id: 'morning-peak', label: 'Morning peak', desc: 'Heavy North/West queues' },
+  { id: 'morning-peak', label: 'Morning peak', desc: 'Heavy queues across the network' },
   { id: 'off-peak', label: 'Off-peak', desc: 'Light traffic' },
-  { id: 'incident', label: 'Lane incident', desc: 'South blockage sample' },
-  { id: 'emergency', label: 'Emergency V2X', desc: 'Ambulance priority drill' },
+  { id: 'incident', label: 'Lane incident', desc: 'Thummulla west approach restriction' },
+  { id: 'emergency', label: 'Emergency V2X', desc: 'Galle Road ambulance priority drill' },
 ]
 
 export function EquipmentPanel() {
   const [tab, setTab] = useState<(typeof tabs)[number]>('Equipment')
   const navigate = useNavigate()
-  const devices = useTrafficStore((s) => s.devices)
+  const allDevices = useTrafficStore((s) => s.devices)
   const recommendations = useTrafficStore((s) => s.recommendations)
-  const junction = useTrafficStore((s) => s.junction)
+  const junction = useTrafficStore(selectActiveJunction)
   const scenario = useTrafficStore((s) => s.scenario)
   const setScenario = useTrafficStore((s) => s.setScenario)
   const setAdaptiveMode = useTrafficStore((s) => s.setAdaptiveMode)
-  const adaptiveMode = useTrafficStore((s) => s.adaptiveMode)
+  const adaptiveMode = junction.adaptive
   const requestAiSuggestion = useTrafficStore((s) => s.requestAiSuggestion)
   const restoreAllDevices = useTrafficStore((s) => s.restoreAllDevices)
   const openCamera = useTrafficStore((s) => s.openCamera)
 
   const stats = useMemo(() => {
+    const devices = allDevices.filter((device) => device.junctionId === junction.id || device.type === 'gps')
     const cameras = devices.filter((d) => d.type === 'camera')
     const sensors = devices.filter((d) => d.type === 'sensor')
     const controllers = devices.filter((d) => d.type === 'controller')
@@ -58,16 +60,16 @@ export function EquipmentPanel() {
       },
       {
         label: 'Pending AI actions',
-        value: `${recommendations.filter((r) => r.status === 'pending').length}`,
+        value: `${recommendations.filter((r) => r.junctionId === junction.id && r.status === 'pending').length}`,
         tone: 'bad',
       },
       {
         label: 'Fallback plan',
-        value: 'Armed',
+        value: isInFallback(junction.id, allDevices) ? 'Active' : 'Ready',
         tone: 'neutral',
       },
     ] as const
-  }, [devices, recommendations])
+  }, [allDevices, junction.id, recommendations])
 
   return (
     <section className="glass rounded-xl p-4">
@@ -225,7 +227,7 @@ export function EquipmentPanel() {
       )}
 
       <div className="mt-3 border-t border-[var(--color-line)] pt-2 font-mono text-[11px] text-[var(--color-muted)]">
-        Latitude: {junction.lat.toFixed(6)} | Longitude: {junction.lng.toFixed(6)} |
+        {junction.name} · {junction.lat.toFixed(4)}, {junction.lng.toFixed(4)} ·
         Scenario: {scenario}
       </div>
     </section>

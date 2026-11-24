@@ -35,6 +35,7 @@ export interface Device {
   id: string
   name: string
   type: DeviceType
+  junctionId?: string
   approach?: Direction
   status: DeviceStatus
   lastHeartbeat: string
@@ -45,6 +46,7 @@ export interface Device {
 export interface Incident {
   id: string
   severity: Severity
+  junctionId: string
   category: string
   title: string
   message: string
@@ -55,6 +57,7 @@ export interface Incident {
 
 export interface Recommendation {
   id: string
+  junctionId: string
   approach: Direction
   fromSec: number
   toSec: number

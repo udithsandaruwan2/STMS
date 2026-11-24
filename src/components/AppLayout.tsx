@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { useTrafficStore } from '../store/useTrafficStore'
 import { CameraModal } from './CameraModal'
@@ -19,18 +19,22 @@ const titles: Record<string, string> = {
 
 export function AppLayout() {
   const location = useLocation()
+  const mainRef = useRef<HTMLElement>(null)
   const startSimulator = useTrafficStore((s) => s.startSimulator)
   const notifOpen = useTrafficStore((s) => s.notifOpen)
   const setNotifOpen = useTrafficStore((s) => s.setNotifOpen)
 
   useEffect(() => startSimulator(), [startSimulator])
+  useLayoutEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [location.key])
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--color-shell)]">
       <Sidebar />
       <div className="relative flex min-w-0 flex-1 flex-col">
         <TopBar title={titles[location.pathname] ?? 'STMS'} />
-        <main className="min-h-0 flex-1 overflow-auto">
+        <main ref={mainRef} className="min-h-0 flex-1 overflow-auto">
           <Outlet />
         </main>
 

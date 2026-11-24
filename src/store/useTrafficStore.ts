@@ -1,14 +1,16 @@
 import { create } from 'zustand'
 import { seedBuses } from '../data/buses'
-import { seedDevices } from '../data/devices'
 import { equipmentStatsSeed, hourlyStats } from '../data/history'
 import { seedIncidents } from '../data/incidents'
-import { pilotJunction } from '../data/junction'
+import { junctionSites, networkDevices, pilotId } from '../data/network'
+import {
+  SIM_INTERVAL_MS, advanceSignal, advanceVehicles, applySignal, createVehicles,
+  initialJunctions, isInFallback, emergencyJunction, measureJunctions, vehiclePosition, withGreen, withAxisTiming,
+  type LiveJunction, type Vehicle,
+} from '../lib/networkSimulation'
 import { seedRoutes } from '../data/routes'
 import {
   buildRecommendation,
-  estimateWait,
-  scenarioQueues,
   shouldSuggestHeavyGreen,
 } from '../lib/rules'
 import type {
@@ -20,16 +22,16 @@ import type {
   Direction,
   HourlyStat,
   Incident,
-  Junction,
   Recommendation,
   RecommendationStatus,
   ScenarioId,
-  Severity,
   SignalPhase,
 } from '../types'
 
 interface TrafficState {
-  junction: Junction
+  junctions: LiveJunction[]
+  activeJunctionId: string
+  vehicles: Vehicle[]
   devices: Device[]
   incidents: Incident[]
   recommendations: Recommendation[]
@@ -38,7 +40,6 @@ interface TrafficState {
   routes: AlternateRoute[]
   buses: BusTrack[]
   activityLog: ActivityLog[]
-  adaptiveMode: boolean
   simRunning: boolean
   simPaused: boolean
   tick: number
@@ -63,7 +64,9 @@ interface TrafficState {
   toggleNotifOpen: () => void
   zoomIn: () => void
   zoomOut: () => void
-  selectApproach: (dir: Direction | null) => void
+  resetZoom: () => void
+  selectJunction: (id: string) => void
+  selectApproach: (dir: Direction | null, junctionId?: string) => void
   selectDevice: (id: string | null) => void
   selectBus: (id: string | null) => void
   selectRoute: (id: string | null) => void
@@ -88,49 +91,60 @@ interface TrafficState {
   pushLog: (action: string) => void
 }
 
-function mutateApproaches(junction: Junction, adaptive: boolean): Junction {
-  const phases: SignalPhase[] = ['green', 'amber', 'red']
-  const approaches = junction.approaches.map((a, index) => {
-    const drift = (Math.random() - 0.42) * (a.direction === 'North' ? 3.2 : 2.1)
-    const queueLength = Math.max(2, Math.min(28, a.queueLength + drift))
-    const vehicleCount = Math.max(4, Math.round(queueLength * 2.2 + Math.random() * 4))
-    const targetGreen =
-      adaptive && a.direction === 'North' && queueLength >= 16
-        ? junction.heavyGreenSec
-        : a.greenSeconds >= junction.heavyGreenSec && adaptive
-          ? junction.heavyGreenSec
-          : Math.max(junction.normalGreenSec, Math.min(a.greenSeconds, junction.heavyGreenSec))
-    const phase = phases[(index + Math.floor(Date.now() / 8000)) % 3]
-    const speedKmh = Math.max(6, Math.round(34 - queueLength * 1.1 + Math.random() * 3))
-    const pedestrianWaiting = Math.max(
-      0,
-      Math.round(a.pedestrianWaiting + (Math.random() - 0.5) * 2),
-    )
-    return {
-      ...a,
-      queueLength,
-      vehicleCount,
-      greenSeconds: targetGreen,
-      avgWaitSec: estimateWait(queueLength, targetGreen),
-      phase,
-      speedKmh,
-      pedestrianWaiting,
-    }
-  })
-  return { ...junction, approaches }
+export const selectActiveJunction = (state: TrafficState) =>
+  state.junctions.find((junction) => junction.id === state.activeJunctionId)!
+
+const initialVehicles = createVehicles('live')
+const initialNetwork = measureJunctions(initialJunctions(), initialVehicles)
+
+function updateJunction(junctions: LiveJunction[], id: string, update: (junction: LiveJunction) => LiveJunction) {
+  return junctions.map((junction) => junction.id === id ? update(junction) : junction)
 }
 
-function mutateBuses(buses: BusTrack[]): BusTrack[] {
-  return buses.map((b) => ({
-    ...b,
-    x: Math.max(80, Math.min(560, b.x + (Math.random() - 0.5) * 18)),
-    y: Math.max(80, Math.min(440, b.y + (Math.random() - 0.5) * 14)),
-    etaMin: Math.max(1, Math.round(b.etaMin + (Math.random() - 0.55) * 1.2)),
-    passengers: Math.max(
-      8,
-      Math.min(65, Math.round(b.passengers + (Math.random() - 0.5) * 4)),
-    ),
-  }))
+function fixedPlan(junction: LiveJunction): LiveJunction {
+  return {
+    ...junction,
+    adaptive: false,
+    signal: junction.signal.phase === 'green'
+      ? { ...junction.signal, next: undefined, remaining: Math.min(junction.signal.remaining, junction.normalGreenSec) }
+      : { ...junction.signal, next: undefined },
+    approaches: junction.approaches.map((approach) => withGreen(approach, junction.normalGreenSec)),
+  }
+}
+
+function updateBuses(vehicles: Vehicle[]) {
+  return seedBuses.map((bus): BusTrack => {
+    const vehicle = vehicles.find((item) => item.id === bus.id)
+    if (!vehicle) return bus
+    const stopped = vehicle.speed < 0.75
+    return {
+      ...bus,
+      ...vehiclePosition(vehicle),
+      status: stopped ? 'delayed' : 'on-time',
+      etaMin: Math.max(2, Math.round(bus.etaMin + (stopped ? 3 : 0) - vehicle.progress / 260)),
+    }
+  })
+}
+
+function updateRoutes(junctions: LiveJunction[]) {
+  const groups = [
+    ['kollupitiya', 'wellawatte'],
+    [pilotId, 'thummulla'],
+    ['town-hall', 'havelock'],
+    ['kollupitiya', pilotId, 'wellawatte'],
+  ]
+  return seedRoutes.map((route, index): AlternateRoute => {
+    const sites = junctions.filter((junction) => groups[index].includes(junction.id))
+    const queue = sites.reduce((sum, junction) =>
+      sum + Math.max(...junction.approaches.map((approach) => approach.queueLength)), 0) / sites.length
+    const crowd = queue >= 9 ? 'Heavy' : queue >= 5 ? 'Medium' : 'Light'
+    return {
+      ...route,
+      etaMin: Math.round(route.distanceKm * 2.5 + queue * 0.85),
+      crowd,
+      status: crowd === 'Heavy' ? 'congested' : crowd === 'Light' && index === 0 ? 'recommended' : 'open',
+    }
+  })
 }
 
 function nowLog(action: string, actor = 'R. Rathnayaka'): ActivityLog {
@@ -145,18 +159,21 @@ function nowLog(action: string, actor = 'R. Rathnayaka'): ActivityLog {
 let simTimer: ReturnType<typeof setInterval> | null = null
 
 export const useTrafficStore = create<TrafficState>((set, get) => ({
-  junction: structuredClone(pilotJunction),
-  devices: structuredClone(seedDevices),
-  incidents: structuredClone(seedIncidents),
+  junctions: initialNetwork,
+  activeJunctionId: pilotId,
+  vehicles: initialVehicles,
+  devices: structuredClone(networkDevices),
+  incidents: seedIncidents.map((incident) => ({ ...incident, junctionId: pilotId })),
   recommendations: [
     {
       id: 'rec-seed-1',
+      junctionId: pilotId,
       approach: 'North',
       fromSec: 30,
       toSec: 50,
-      queueLength: 18,
+      queueLength: initialNetwork.find((junction) => junction.id === pilotId)!.approaches[0].queueLength,
       reason:
-        'North queue length 18 vehicles exceeds threshold 16. Suggest extending green within approved safe plan. Pedestrian protect time unchanged.',
+        'Sample recommendation for the Galle Road North approach. Extend the next green window while keeping pedestrian protection unchanged.',
       status: 'pending',
       createdAt: new Date(Date.now() - 45000).toISOString(),
       confidence: 86,
@@ -164,13 +181,12 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   ],
   hourlyStats,
   equipmentStats: equipmentStatsSeed,
-  routes: structuredClone(seedRoutes),
-  buses: structuredClone(seedBuses),
+  routes: updateRoutes(initialNetwork),
+  buses: updateBuses(initialVehicles),
   activityLog: [
     nowLog('Pilot dashboard session started', 'System'),
-    nowLog('Loaded Bambalapitiya sample junction', 'System'),
+    nowLog('Loaded six Colombo demo junctions', 'System'),
   ],
-  adaptiveMode: false,
   simRunning: false,
   simPaused: false,
   tick: 0,
@@ -199,64 +215,52 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   },
 
   setAdaptiveMode: (value) => {
+    const state = get()
+    const junction = selectActiveJunction(state)
+    if (value && isInFallback(junction.id, state.devices)) {
+      set({ toast: 'Restore local devices before enabling adaptive timing' })
+      return
+    }
     set({
-      adaptiveMode: value,
-      toast: value ? 'Adaptive timing enabled' : 'Fixed timing restored',
+      junctions: updateJunction(state.junctions, junction.id, (local) =>
+        value ? { ...local, adaptive: true } : fixedPlan(local)),
+      toast: value ? 'Adaptive plan enabled for reviewed timings' : 'Fixed timing restored',
     })
-    get().pushLog(value ? 'Enabled adaptive timing' : 'Disabled adaptive timing')
+    get().pushLog(`${junction.name}: ${value ? 'enabled adaptive plan' : 'restored fixed plan'}`)
   },
 
   setScenario: (scenario) => {
-    const queues = scenarioQueues(scenario)
-    const junction = get().junction
-    const next = {
-      ...junction,
-      approaches: junction.approaches.map((a) => {
-        const q = queues[a.direction]
-        return {
-          ...a,
-          queueLength: q,
-          vehicleCount: Math.round(q * 2.2),
-          avgWaitSec: estimateWait(q, a.greenSeconds),
-          speedKmh: Math.max(6, Math.round(34 - q * 1.1)),
-        }
-      }),
-    }
-
-    const extraIncidents: Incident[] = []
-    if (scenario === 'emergency') {
-      extraIncidents.push({
-        id: `inc-emg-${Date.now()}`,
-        severity: 'critical',
-        category: 'Emergency',
-        title: 'Emergency priority scenario active',
-        message: 'Ambulance corridor sample — review South approach priority.',
-        timestamp: new Date().toISOString(),
-        acknowledged: false,
-        approach: 'South',
-      })
-    }
-    if (scenario === 'incident') {
-      extraIncidents.push({
-        id: `inc-scn-${Date.now()}`,
-        severity: 'high',
-        category: 'Incident',
-        title: 'Lane blockage scenario (sample)',
-        message: 'South approach obstruction injected for demo training.',
-        timestamp: new Date().toISOString(),
-        acknowledged: false,
-        approach: 'South',
-      })
-    }
-
+    const state = get()
+    const vehicles = createVehicles(scenario)
+    const junctions = measureJunctions(initialJunctions(), vehicles)
+    const scenarioSite = scenario === 'incident' ? 'thummulla' : pilotId
+    const extra: Incident[] = scenario === 'incident' || scenario === 'emergency' ? [{
+      id: `scenario-${scenario}-${Date.now()}`,
+      junctionId: scenarioSite,
+      severity: scenario === 'incident' ? 'high' : 'critical',
+      category: scenario === 'incident' ? 'Incident' : 'Emergency',
+      title: scenario === 'incident' ? 'Lane restriction at Thummulla' : 'Ambulance priority drill',
+      message: scenario === 'incident'
+        ? 'Eastbound traffic is slowed on the West approach. Dismiss this event to clear the restriction.'
+        : 'The ambulance follows Galle Road northbound. Signals give its approach priority after the current phase clears.',
+      timestamp: new Date().toISOString(),
+      acknowledged: false,
+      approach: scenario === 'incident' ? 'West' : 'South',
+    }] : []
     set({
       scenario,
-      junction: next,
-      adaptiveMode: scenario === 'morning-peak',
-      incidents: [...extraIncidents, ...get().incidents].slice(0, 16),
+      junctions,
+      vehicles,
+      buses: updateBuses(vehicles),
+      routes: updateRoutes(junctions),
+      activeJunctionId: extra.length ? scenarioSite : state.activeJunctionId,
+      selectedApproach: null,
+      selectedBusId: null,
+      recommendations: state.recommendations.filter((item) => item.status !== 'pending'),
+      incidents: [...extra, ...state.incidents.filter((item) => !item.id.startsWith('scenario-'))].slice(0, 24),
       toast: `Scenario loaded: ${scenario}`,
     })
-    get().pushLog(`Applied scenario “${scenario}”`)
+    get().pushLog(`Applied network scenario “${scenario}”`)
   },
 
   setSearchQuery: (q) => set({ searchQuery: q }),
@@ -264,10 +268,24 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   setNotifOpen: (open) => set({ notifOpen: open }),
   toggleNotifOpen: () => set((s) => ({ notifOpen: !s.notifOpen })),
 
-  zoomIn: () => set((s) => ({ mapZoom: Math.min(1.8, +(s.mapZoom + 0.15).toFixed(2)) })),
-  zoomOut: () => set((s) => ({ mapZoom: Math.max(0.7, +(s.mapZoom - 0.15).toFixed(2)) })),
+  zoomIn: () => set((s) => ({ mapZoom: Math.min(2.6, +(s.mapZoom + 0.4).toFixed(2)) })),
+  zoomOut: () => set((s) => ({ mapZoom: Math.max(1, +(s.mapZoom - 0.4).toFixed(2)) })),
 
-  selectApproach: (dir) => set({ selectedApproach: dir, selectedBusId: null }),
+  resetZoom: () => set({ mapZoom: 1 }),
+
+  selectJunction: (id) => {
+    if (get().junctions.some((junction) => junction.id === id)) {
+      set({ activeJunctionId: id, selectedApproach: null, selectedBusId: null })
+    }
+  },
+  selectApproach: (dir, junctionId) => {
+    if (junctionId && !get().junctions.some((junction) => junction.id === junctionId)) return
+    set((state) => ({
+      activeJunctionId: junctionId ?? state.activeJunctionId,
+      selectedApproach: dir,
+      selectedBusId: null,
+    }))
+  },
   selectDevice: (id) => set({ selectedDeviceId: id }),
   selectBus: (id) => set({ selectedBusId: id, selectedApproach: null }),
   selectRoute: (id) => {
@@ -279,7 +297,7 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   },
 
   openCamera: (deviceId) => {
-    const cameras = get().devices.filter((d) => d.type === 'camera')
+    const cameras = get().devices.filter((d) => d.type === 'camera' && d.junctionId === get().activeJunctionId)
     const id = deviceId ?? cameras[0]?.id ?? null
     set({ cameraOpen: true, selectedDeviceId: id, toast: 'Camera viewer opened' })
     get().pushLog(`Opened camera feed ${id ?? ''}`)
@@ -287,131 +305,105 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   closeCamera: () => set({ cameraOpen: false }),
 
   setApproachPhase: (dir, phase) => {
-    set((s) => ({
-      junction: {
-        ...s.junction,
-        approaches: s.junction.approaches.map((a) =>
-          a.direction === dir ? { ...a, phase } : a,
-        ),
-      },
-      toast: `${dir} phase set to ${phase}`,
-    }))
-    get().pushLog(`Set ${dir} signal phase → ${phase}`)
+    const state = get()
+    const junction = selectActiveJunction(state)
+    if (isInFallback(junction.id, state.devices)) {
+      set({ toast: 'Manual phases are unavailable during local fallback' })
+      return
+    }
+    const current = junction.signal
+    const next = { direction: dir, phase }
+    const signal = current.phase === 'green'
+      ? { ...current, phase: 'amber' as const, remaining: 3, next }
+      : { ...current, next }
+    set({
+      junctions: updateJunction(state.junctions, junction.id, (local) => applySignal(local, signal)),
+      toast: `${dir} ${phase} requested after signal clearance`,
+    })
+    state.pushLog(`${junction.name}: requested ${dir} ${phase} phase`)
   },
 
   setApproachGreen: (dir, seconds) => {
-    const junction = get().junction
-    const clamped = Math.max(
-      junction.normalGreenSec,
-      Math.min(junction.heavyGreenSec, seconds),
-    )
-    set((s) => ({
-      junction: {
-        ...s.junction,
-        approaches: s.junction.approaches.map((a) =>
-          a.direction === dir
-            ? {
-                ...a,
-                greenSeconds: clamped,
-                avgWaitSec: estimateWait(a.queueLength, clamped),
-              }
-            : a,
-        ),
-      },
-      toast: `${dir} green set to ${clamped}s (demo)`,
-    }))
-    get().pushLog(`Adjusted ${dir} green → ${clamped}s`)
+    const state = get()
+    const junction = selectActiveJunction(state)
+    if (!Number.isFinite(seconds)) return
+    if (isInFallback(junction.id, state.devices)) {
+      set({ toast: 'Timing changes are unavailable during local fallback' })
+      return
+    }
+    const clamped = Math.max(junction.normalGreenSec, Math.min(junction.heavyGreenSec, seconds))
+    set({
+      junctions: updateJunction(state.junctions, junction.id, (local) => ({
+        ...local,
+        approaches: withAxisTiming(local, dir, clamped),
+      })),
+      toast: `${dir} next green set to ${clamped}s (demo)`,
+    })
+    state.pushLog(`${junction.name}: set ${dir} next green to ${clamped}s`)
   },
 
   cycleGreen: (dir) => {
-    const a = get().junction.approaches.find((x) => x.direction === dir)
-    if (!a) return
-    const next =
-      a.greenSeconds >= get().junction.heavyGreenSec
-        ? get().junction.normalGreenSec
-        : get().junction.heavyGreenSec
-    get().setApproachGreen(dir, next)
+    const junction = selectActiveJunction(get())
+    const approach = junction.approaches.find((item) => item.direction === dir)
+    if (!approach) return
+    get().setApproachGreen(dir, approach.greenSeconds >= junction.heavyGreenSec
+      ? junction.normalGreenSec : junction.heavyGreenSec)
   },
 
   reviewRecommendation: (id, status, note) => {
-    const { recommendations, junction, adaptiveMode } = get()
-    const target = recommendations.find((r) => r.id === id)
-    const nextRecs = recommendations.map((r) =>
-      r.id === id
-        ? {
-            ...r,
-            status,
-            operatorNote: note,
-            reviewedAt: new Date().toISOString(),
-          }
-        : r,
-    )
-
-    let nextJunction = junction
-    if (status === 'approved' && target) {
-      nextJunction = {
-        ...junction,
-        approaches: junction.approaches.map((a) =>
-          a.direction === target.approach
-            ? { ...a, greenSeconds: target.toSec }
-            : a,
-        ),
-      }
+    const state = get()
+    const target = state.recommendations.find((item) => item.id === id)
+    if (!target || target.status !== 'pending') return
+    const junction = state.junctions.find((item) => item.id === target.junctionId)!
+    if (status === 'approved' && isInFallback(junction.id, state.devices)) {
+      set({ toast: 'Restore local equipment before approving this suggestion' })
+      return
     }
-
+    const timestamp = new Date().toISOString()
     set({
-      recommendations: nextRecs,
-      junction: nextJunction,
-      adaptiveMode: status === 'approved' ? true : adaptiveMode,
-      toast:
-        status === 'approved'
-          ? 'Recommendation approved'
-          : 'Recommendation rejected',
-      incidents: [
-        {
-          id: `inc-review-${Date.now()}`,
-          severity: (status === 'approved' ? 'high' : 'info') as Severity,
-          category: 'Control',
-          title:
-            status === 'approved'
-              ? 'Adaptive green approved (illustrative)'
-              : 'AI suggestion rejected',
-          message:
-            status === 'approved'
-              ? `${target?.approach ?? 'Approach'} green extended under operator supervision. Demo only — no real actuation.`
-              : note || 'Operator retained fixed timing plan.',
-          timestamp: new Date().toISOString(),
-          acknowledged: false,
-          approach: target?.approach,
-        },
-        ...get().incidents,
-      ].slice(0, 16),
+      recommendations: state.recommendations.map((item) => item.id === id
+        ? { ...item, status, operatorNote: note, reviewedAt: timestamp } : item),
+      junctions: status === 'approved' ? updateJunction(state.junctions, junction.id, (local) => ({
+        ...local,
+        adaptive: true,
+        approaches: withAxisTiming(local, target.approach, target.toSec),
+      })) : state.junctions,
+      toast: status === 'approved' ? 'Recommendation approved for the next green phase' : 'Recommendation rejected',
+      incidents: [{
+        id: `inc-review-${id}`,
+        junctionId: junction.id,
+        severity: status === 'approved' ? 'high' as const : 'info' as const,
+        category: 'Control',
+        title: status === 'approved' ? 'Adaptive green approved (demo)' : 'Timing suggestion rejected',
+        message: status === 'approved' ? `${target.approach} next green set to ${target.toSec}s.` : note,
+        timestamp,
+        acknowledged: false,
+        approach: target.approach,
+      }, ...state.incidents].slice(0, 24),
     })
-    get().pushLog(
-      status === 'approved'
-        ? `Approved AI suggestion ${id}`
-        : `Rejected AI suggestion ${id}`,
-    )
+    state.pushLog(`${junction.name}: ${status} ${target.approach} timing suggestion`)
   },
 
   requestAiSuggestion: (dir = 'North') => {
-    const junction = get().junction
-    const approach = junction.approaches.find((a) => a.direction === dir)
+    const state = get()
+    const junction = selectActiveJunction(state)
+    const approach = junction.approaches.find((item) => item.direction === dir)
     if (!approach) return
-    if (get().recommendations.some((r) => r.status === 'pending')) {
-      set({ toast: 'A pending suggestion already exists' })
+    if (isInFallback(junction.id, state.devices)) {
+      set({ toast: 'Suggestions are unavailable during local fallback' })
       return
     }
-    const rec = buildRecommendation(
-      { ...approach, queueLength: Math.max(approach.queueLength, 17) },
-      junction.normalGreenSec,
-      junction.heavyGreenSec,
-    )
-    set((s) => ({
-      recommendations: [rec, ...s.recommendations].slice(0, 10),
-      toast: `AI suggestion created for ${dir}`,
-    }))
-    get().pushLog(`Requested AI suggestion for ${dir}`)
+    if (state.recommendations.some((item) => item.junctionId === junction.id && item.status === 'pending')) {
+      set({ toast: 'This junction already has a pending suggestion' })
+      return
+    }
+    if (approach.greenSeconds >= junction.heavyGreenSec) {
+      set({ toast: 'This approach already has the extended green timing' })
+      return
+    }
+    const rec = buildRecommendation(junction.id, approach, junction.heavyGreenSec, true)
+    set({ recommendations: [rec, ...state.recommendations].slice(0, 36), toast: `Suggestion created for ${dir}` })
+    state.pushLog(`${junction.name}: requested ${dir} timing suggestion`)
   },
 
   toggleDeviceFault: (id) => {
@@ -427,25 +419,32 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
   },
 
   setDeviceStatus: (id, status) => {
-    set((state) => ({
-      devices: state.devices.map((d) =>
-        d.id === id
-          ? {
-              ...d,
-              status,
-              lastHeartbeat: new Date().toISOString(),
-              detail:
-                status === 'online'
-                  ? 'Restored in demo'
-                  : status === 'degraded'
-                    ? 'Degraded — reduced confidence'
-                    : 'Simulated fault injected for demo',
-            }
-          : d,
-      ),
-      toast: `Device ${id} → ${status}`,
-    }))
-    get().pushLog(`Set device ${id} status → ${status}`)
+    const state = get()
+    const device = state.devices.find((item) => item.id === id)
+    if (!device || device.status === status) return
+    const devices = state.devices.map((item) => item.id === id ? {
+      ...item,
+      status,
+      lastHeartbeat: status === 'offline' ? item.lastHeartbeat : new Date().toISOString(),
+      detail: status === 'online' ? 'Restored in demo'
+        : status === 'degraded' ? 'Degraded — reduced confidence' : 'Simulated fault',
+    } : item)
+    const site = junctionSites.find((item) => item.id === device.junctionId)
+    const fallback = site && isInFallback(site.id, devices)
+    const newFallback = fallback && !isInFallback(site.id, state.devices)
+    const fault: Incident[] = newFallback ? [{
+      id: `fallback-${id}-${Date.now()}`, junctionId: site.id, severity: 'critical',
+      category: 'Equipment', title: 'Fixed fallback plan active',
+      message: `${site.name} reverted to fixed timing after an equipment fault.`,
+      timestamp: new Date().toISOString(), acknowledged: false,
+    }] : []
+    set({
+      devices,
+      junctions: fallback ? updateJunction(state.junctions, site.id, fixedPlan) : state.junctions,
+      incidents: [...fault, ...state.incidents].slice(0, 24),
+      toast: fallback ? `${site.name} is on fixed fallback timing` : `${device.name}: ${status}`,
+    })
+    state.pushLog(`Set ${device.name} status to ${status}`)
   },
 
   restoreAllDevices: () => {
@@ -482,7 +481,8 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
 
   injectIncident: (partial) => {
     const incident: Incident = {
-      id: `inc-${Date.now()}`,
+      id: `inc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      junctionId: partial?.junctionId ?? get().activeJunctionId,
       severity: partial?.severity ?? 'high',
       category: partial?.category ?? 'Traffic',
       title: partial?.title ?? 'Manual incident logged',
@@ -494,7 +494,7 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
       approach: partial?.approach,
     }
     set((s) => ({
-      incidents: [incident, ...s.incidents].slice(0, 16),
+      incidents: [incident, ...s.incidents].slice(0, 24),
       notifOpen: true,
       toast: 'Incident injected',
     }))
@@ -503,62 +503,50 @@ export const useTrafficStore = create<TrafficState>((set, get) => ({
 
   startSimulator: () => {
     if (simTimer) return () => undefined
-    set({ simRunning: true, simPaused: false })
+    set({ simRunning: true })
     simTimer = setInterval(() => {
       const state = get()
       if (state.simPaused) return
 
-      const junction = mutateApproaches(state.junction, state.adaptiveMode)
-      const buses = mutateBuses(state.buses)
-      const north = junction.approaches.find((a) => a.direction === 'North')
-      let recommendations = state.recommendations
-      const hasPending = recommendations.some((r) => r.status === 'pending')
-
-      if (
-        north &&
-        !hasPending &&
-        shouldSuggestHeavyGreen(
-          north,
-          junction.normalGreenSec,
-          junction.heavyGreenSec,
-        ) &&
-        !state.adaptiveMode &&
-        Math.random() > 0.65
-      ) {
-        recommendations = [
-          buildRecommendation(
-            north,
-            junction.normalGreenSec,
-            junction.heavyGreenSec,
-          ),
-          ...recommendations,
-        ].slice(0, 10)
-      }
-
-      const devices = state.devices.map((d) =>
-        Math.random() > 0.9
-          ? { ...d, lastHeartbeat: new Date().toISOString() }
-          : d,
-      )
-
-      const routes = state.routes.map((r) => {
-        if (Math.random() > 0.7) return r
-        const etaDelta = Math.round((Math.random() - 0.45) * 3)
-        return {
-          ...r,
-          etaMin: Math.max(6, r.etaMin + etaDelta),
-        }
+      const tick = state.tick + 1
+      const restriction = state.incidents.find((item) => item.id.startsWith('scenario-incident-'))
+      const ambulance = state.vehicles.find((vehicle) => vehicle.kind === 'ambulance')
+      const prioritySite = ambulance ? emergencyJunction(ambulance) : undefined
+      const signals = state.junctions.map((junction) => {
+        const fallback = isInFallback(junction.id, state.devices)
+        const priority = !fallback && junction.id === prioritySite
+        return advanceSignal(junction, fallback, priority)
       })
+      const vehicles = advanceVehicles(state.vehicles, signals,
+        restriction?.approach ? { junctionId: restriction.junctionId, direction: restriction.approach } : undefined)
+      const junctions = measureJunctions(signals, vehicles)
+      const newRecommendations = tick % 12 === 0 ? junctions.flatMap((junction) => {
+        if (isInFallback(junction.id, state.devices) || state.recommendations.some((item) =>
+          item.junctionId === junction.id && item.status === 'pending')) return []
+        const busiest = junction.approaches.filter((approach) =>
+          shouldSuggestHeavyGreen(approach, junction.heavyGreenSec) &&
+          !state.recommendations.some((item) => item.junctionId === junction.id &&
+            item.approach === approach.direction && item.status === 'rejected' &&
+            item.reviewedAt && Date.now() - Date.parse(item.reviewedAt) < 30_000))
+          .sort((a, b) => b.queueLength - a.queueLength)[0]
+        return busiest ? [buildRecommendation(junction.id, busiest, junction.heavyGreenSec)] : []
+      }) : []
 
       set({
-        junction,
-        devices,
-        buses,
-        routes,
-        recommendations,
-        tick: state.tick + 1,
+        junctions,
+        vehicles,
+        buses: updateBuses(vehicles),
+        ...(tick % 4 === 0 ? { routes: updateRoutes(junctions) } : {}),
+        ...(tick % 20 === 0 ? {
+          devices: state.devices.map((device) => device.status === 'offline' ? device
+            : { ...device, lastHeartbeat: new Date().toISOString() }),
+        } : {}),
+        ...(newRecommendations.length ? {
+          recommendations: [...newRecommendations, ...state.recommendations].slice(0, 36),
+        } : {}),
+        tick,
       })
-    }, 2500)
+    }, SIM_INTERVAL_MS)
 
     return () => {
       if (simTimer) clearInterval(simTimer)

@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 
 export function CameraModal() {
   const open = useTrafficStore((s) => s.cameraOpen)
@@ -7,16 +7,19 @@ export function CameraModal() {
   const devices = useTrafficStore((s) => s.devices)
   const selectedDeviceId = useTrafficStore((s) => s.selectedDeviceId)
   const selectDevice = useTrafficStore((s) => s.selectDevice)
-  const junction = useTrafficStore((s) => s.junction)
+  const activeJunction = useTrafficStore(selectActiveJunction)
+  const junctions = useTrafficStore((s) => s.junctions)
 
   if (!open) return null
 
-  const cameras = devices.filter((d) => d.type === 'camera')
-  const active = cameras.find((c) => c.id === selectedDeviceId) ?? cameras[0]
+  const selectedCamera = devices.find((device) => device.id === selectedDeviceId && device.type === 'camera')
+  const junction = junctions.find((item) => item.id === selectedCamera?.junctionId) ?? activeJunction
+  const cameras = devices.filter((device) => device.type === 'camera' && device.junctionId === junction.id)
+  const active = selectedCamera ?? cameras[0]
   const approach = junction.approaches.find((a) => a.direction === active?.approach)
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-label="Simulated camera viewer" className="fixed inset-0 z-[70] grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-2xl">
         <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
           <div>
@@ -24,11 +27,12 @@ export function CameraModal() {
               {active?.name ?? 'Camera feed'}
             </div>
             <div className="text-xs text-[var(--color-muted)]">
-              Sample CCTV viewer — not live video
+              {junction.name} · Simulated CCTV data
             </div>
           </div>
           <button
             type="button"
+            aria-label="Close camera viewer"
             onClick={closeCamera}
             className="rounded-lg border border-[var(--color-line)] p-2 text-[var(--color-muted)] hover:text-white"
           >
@@ -66,16 +70,16 @@ export function CameraModal() {
               <div className="absolute inset-0 grid place-items-center">
                 <div className="text-center">
                   <div className="text-lg font-semibold text-white">
-                    {active?.approach} approach view
+                    {active?.status === 'offline' ? 'Camera offline' : `${active?.approach} approach view`}
                   </div>
-                  <div className="mt-1 font-mono text-sm text-[var(--color-muted)]">
+                  {active?.status !== 'offline' && <div className="mt-1 font-mono text-sm text-[var(--color-muted)]">
                     Q {Math.round(approach?.queueLength ?? 0)} ·{' '}
                     {approach?.vehicleCount ?? 0} vehicles · {approach?.phase}
-                  </div>
+                  </div>}
                 </div>
               </div>
               {/* fake cars */}
-              {Array.from({ length: Math.min(8, Math.round(approach?.queueLength ?? 0) / 2) }).map(
+              {active?.status !== 'offline' && Array.from({ length: Math.min(8, Math.round(approach?.queueLength ?? 0) / 2) }).map(
                 (_, i) => (
                   <div
                     key={i}

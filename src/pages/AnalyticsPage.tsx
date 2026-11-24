@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { junctionSites } from '../data/network'
 import {
   Area,
   AreaChart,
@@ -13,11 +14,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 
 export function AnalyticsPage() {
   const hourlyStats = useTrafficStore((s) => s.hourlyStats)
-  const junction = useTrafficStore((s) => s.junction)
+  const junction = useTrafficStore(selectActiveJunction)
+  const junctions = useTrafficStore((state) => state.junctions)
   const incidents = useTrafficStore((s) => s.incidents)
   const recommendations = useTrafficStore((s) => s.recommendations)
   const [range, setRange] = useState<'all' | 'peak' | 'evening'>('all')
@@ -43,6 +45,12 @@ export function AnalyticsPage() {
     speed: a.speedKmh,
   }))
 
+  const networkQueues = junctions.map((local) => ({
+    name: junctionSites.find((site) => site.id === local.id)!.name,
+    queued: local.approaches.reduce((total, approach) => total + approach.queueLength, 0),
+    detected: local.approaches.reduce((total, approach) => total + approach.vehicleCount, 0),
+  }))
+
   const exportReport = () => {
     const payload = {
       junction: junction.name,
@@ -57,6 +65,8 @@ export function AnalyticsPage() {
         approvedRecs: recommendations.filter((r) => r.status === 'approved').length,
       },
       hourly: filtered,
+      liveApproaches: approachBars,
+      liveNetwork: networkQueues,
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
@@ -77,7 +87,7 @@ export function AnalyticsPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Pilot analytics</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            Sample patterns for {junction.name}. Figures are illustrative only.
+            Live demo metrics for {junction.name} and sample hourly history.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -130,9 +140,21 @@ export function AnalyticsPage() {
         ))}
       </div>
 
+      <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
+        <h2 className="mb-3 text-sm font-semibold text-white">Live network queues</h2>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+          {networkQueues.map((row) => (
+            <div key={row.name} className="rounded-md bg-black/25 p-2.5">
+              <div className="text-xs text-slate-300">{row.name}</div>
+              <div className="mt-1 font-mono text-sm text-white">{row.queued} queued</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-          <h2 className="mb-3 text-sm font-semibold text-white">Hourly vehicle volume</h2>
+          <h2 className="mb-3 text-sm font-semibold text-white">Sample hourly vehicle volume</h2>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={filtered}>
@@ -160,7 +182,7 @@ export function AnalyticsPage() {
 
         <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
           <h2 className="mb-3 text-sm font-semibold text-white">
-            Waiting time — fixed vs adaptive
+            Sample wait time · fixed vs adaptive
           </h2>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -221,7 +243,7 @@ export function AnalyticsPage() {
         </section>
 
         <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-          <h2 className="mb-3 text-sm font-semibold text-white">Incident counts by hour</h2>
+          <h2 className="mb-3 text-sm font-semibold text-white">Sample incident counts by hour</h2>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={filtered}>

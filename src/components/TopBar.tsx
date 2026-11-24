@@ -1,7 +1,8 @@
 import { Bell, Pause, Play, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { junctionSites } from '../data/network'
 import { useNavigate } from 'react-router-dom'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 
 export function TopBar({ title }: { title: string }) {
   const navigate = useNavigate()
@@ -12,12 +13,13 @@ export function TopBar({ title }: { title: string }) {
   const unacked = useTrafficStore(
     (s) => s.incidents.filter((i) => !i.acknowledged).length,
   )
-  const junction = useTrafficStore((s) => s.junction)
+  const junction = useTrafficStore(selectActiveJunction)
   const devices = useTrafficStore((s) => s.devices)
   const incidents = useTrafficStore((s) => s.incidents)
   const searchQuery = useTrafficStore((s) => s.searchQuery)
   const setSearchQuery = useTrafficStore((s) => s.setSearchQuery)
   const toggleNotifOpen = useTrafficStore((s) => s.toggleNotifOpen)
+  const selectJunction = useTrafficStore((s) => s.selectJunction)
   const selectApproach = useTrafficStore((s) => s.selectApproach)
   const selectDevice = useTrafficStore((s) => s.selectDevice)
   const openCamera = useTrafficStore((s) => s.openCamera)
@@ -30,8 +32,17 @@ export function TopBar({ title }: { title: string }) {
     if (!q) return []
     const hits: Array<{ label: string; hint: string; run: () => void }> = []
 
+    for (const site of junctionSites) {
+      if (`${site.name} ${site.road}`.toLowerCase().includes(q)) {
+        hits.push({
+          label: site.name,
+          hint: site.road,
+          run: () => { selectJunction(site.id); navigate('/'); setSearchQuery('') },
+        })
+      }
+    }
     for (const a of junction.approaches) {
-      if (a.direction.toLowerCase().includes(q) || `queue ${a.direction}`.includes(q)) {
+      if (a.direction.toLowerCase().includes(q) || `queue ${a.direction.toLowerCase()}`.includes(q)) {
         hits.push({
           label: `${a.direction} approach`,
           hint: `Q ${Math.round(a.queueLength)} · ${a.phase}`,
@@ -127,6 +138,7 @@ export function TopBar({ title }: { title: string }) {
     incidents,
     navigate,
     selectApproach,
+    selectJunction,
     selectDevice,
     openCamera,
     setSearchQuery,
@@ -134,8 +146,8 @@ export function TopBar({ title }: { title: string }) {
   ])
 
   return (
-    <header className="relative z-40 flex h-14 items-center gap-4 border-b border-[var(--color-line)] bg-[#0a1322] px-5">
-      <div className="min-w-40 text-sm font-medium text-white">{title}</div>
+    <header className="relative z-40 flex h-14 items-center gap-2 border-b border-[var(--color-line)] bg-[#0a1322] px-2 sm:gap-4 sm:px-5">
+      <div className="hidden shrink-0 text-sm sm:block font-medium text-white">{title}</div>
 
       <div className="relative mx-auto w-full max-w-xl">
         <Search
@@ -144,7 +156,7 @@ export function TopBar({ title }: { title: string }) {
         />
         <input
           className="w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-2 pr-3 pl-9 text-sm text-white outline-none placeholder:text-[var(--color-muted)] focus:border-[var(--color-mint)]"
-          placeholder="Search approaches, devices, incidents, commands…"
+          placeholder="Search junctions, devices, incidents…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -175,6 +187,12 @@ export function TopBar({ title }: { title: string }) {
       </div>
 
       <div className="flex items-center gap-2">
+        {title !== 'Monitor' && title !== 'Faults' && title !== 'System' && (
+          <select aria-label="Active junction" value={junction.id} onChange={(event) => selectJunction(event.target.value)}
+            className="max-w-24 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-2 text-xs text-white sm:max-w-none">
+            {junctionSites.map((site) => <option value={site.id} key={site.id}>{site.name}</option>)}
+          </select>
+        )}
         <button
           type="button"
           onClick={() => setSimPaused(!simPaused)}
@@ -182,7 +200,7 @@ export function TopBar({ title }: { title: string }) {
           title={simPaused ? 'Resume simulation' : 'Pause simulation'}
         >
           {simPaused ? <Play size={14} /> : <Pause size={14} />}
-          {simPaused ? 'Resume' : 'Pause'}
+          <span className="hidden sm:inline">{simPaused ? 'Resume' : 'Pause'}</span>
         </button>
 
         <button
@@ -199,7 +217,7 @@ export function TopBar({ title }: { title: string }) {
           )}
         </button>
 
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5">
+        <div className="hidden items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5 lg:flex">
           <div className="grid h-7 w-7 place-items-center rounded-full bg-[var(--color-mint-dim)] text-xs font-semibold text-white">
             RR
           </div>

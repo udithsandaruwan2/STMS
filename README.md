@@ -1,6 +1,6 @@
 # STMS — Smart Traffic Management System
 
-Prototype dashboard for **Innovation & Entrepreneurship Assignment 2** (COHNDIS261F-019): a conceptual smart traffic pilot for one Colombo junction, powered by **dummy/sample data**.
+Prototype dashboard for **Innovation & Entrepreneurship Assignment 2** (COHNDIS261F-019): a conceptual smart traffic pilot across six schematic Colombo junctions, powered by **simulated data**.
 
 ## Quick start
 
@@ -13,12 +13,12 @@ Open the local Vite URL (usually `http://localhost:5173`).
 
 ## What you can demo
 
-- **Monitor** — map zoom, click approaches/buses, cameras, scenarios, inject/ack incidents
+- **Monitor** — network map, moving cars and buses, queue overlays, phase countdowns, cameras, and five traffic scenarios
 - **Search / Pause / Bell** — command search, pause sim, notification drawer
 - **Control** — approve/reject AI suggestions + manual phase/green overrides
-- **Faults** — filter devices, cycle status, restore all, camera feeds
-- **Analytics** — range filters, live approach bars, export JSON report
-- **Automation** — digital twin apply fixed/adaptive to approaches
+- **Faults** — filter devices by junction, simulate faults and fixed fallback, restore devices, and view demo cameras
+- **Analytics** — live network queues and approach metrics, sample hourly trends, JSON export
+- **Automation** — digital twin compare and apply fixed/adaptive plans at the selected junction
 - **Driver** — open alternate routes and select one (Marine Drive, etc.)
 - **System** — demo controls + activity log
 

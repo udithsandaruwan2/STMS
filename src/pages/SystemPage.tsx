@@ -11,6 +11,8 @@ const steps = [
 
 export function SystemPage() {
   const activityLog = useTrafficStore((s) => s.activityLog)
+  const junctionCount = useTrafficStore((state) => state.junctions.length)
+  const vehicleCount = useTrafficStore((state) => state.vehicles.length)
   const tick = useTrafficStore((s) => s.tick)
   const scenario = useTrafficStore((s) => s.scenario)
   const setScenario = useTrafficStore((s) => s.setScenario)
@@ -46,7 +48,7 @@ export function SystemPage() {
       <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
         <h2 className="text-sm font-semibold text-white">Demo controls</h2>
         <p className="mt-1 text-xs text-[var(--color-muted)]">
-          Tick {tick} · scenario {scenario}
+          {junctionCount} junctions · {vehicleCount} vehicles · tick {tick} · {scenario}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -89,7 +91,7 @@ export function SystemPage() {
 
       <section className="grid gap-3 md:grid-cols-2">
         {[
-          ['Monitor', '/', 'Live junction map, equipment KPIs, notifications'],
+          ['Monitor', '/', 'Live network map, equipment KPIs, notifications'],
           ['Control', '/control', 'Approve or reject AI timing suggestions'],
           ['Analytics', '/analytics', 'Sample peak-hour and wait-time charts'],
           ['Driver', '/driver', 'Public mobile-style route alerts'],

@@ -1,21 +1,23 @@
 import { AlertTriangle, Check, MapPinned, Navigation } from 'lucide-react'
 import { useState } from 'react'
-import { driverMessage } from '../lib/rules'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { junctionSites } from '../data/network'
+import { HEAVY_QUEUE, driverMessage } from '../lib/rules'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 
 export function DriverPage() {
-  const junction = useTrafficStore((s) => s.junction)
+  const junction = useTrafficStore(selectActiveJunction)
   const routes = useTrafficStore((s) => s.routes)
   const selectedRouteId = useTrafficStore((s) => s.selectedRouteId)
   const selectRoute = useTrafficStore((s) => s.selectRoute)
   const pending = useTrafficStore((s) =>
-    s.recommendations.some((r) => r.status === 'pending'),
+    s.recommendations.some((r) => r.junctionId === junction.id && r.status === 'pending'),
   )
   const [showRoutes, setShowRoutes] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
+  const [lastRefresh, setLastRefresh] = useState(() => new Date().toLocaleTimeString())
 
   const maxQueue = Math.max(...junction.approaches.map((a) => a.queueLength))
-  const message = driverMessage(maxQueue, pending)
+  const location = junctionSites.find((site) => site.id === junction.id)!.name
+  const message = driverMessage(maxQueue, pending, location)
   const selected = routes.find((r) => r.id === selectedRouteId)
 
   return (
@@ -26,24 +28,23 @@ export function DriverPage() {
             <span>STMS Alerts</span>
             <button
               type="button"
-              onClick={() => setRefreshKey((k) => k + 1)}
+              onClick={() => setLastRefresh(new Date().toLocaleTimeString())}
               className="font-mono hover:text-white"
               title="Refresh"
             >
-              {new Date().toLocaleTimeString()} · tap refresh
+              {lastRefresh} · tap refresh
             </button>
           </div>
 
           <div className="mb-4 flex items-center gap-2 text-[var(--color-mint)]">
             <MapPinned size={18} />
-            <span className="text-sm font-semibold">Near Bambalapitiya</span>
+            <span className="text-sm font-semibold">Near {location}</span>
           </div>
 
           <div
-            key={refreshKey}
             className={[
               'rounded-2xl border p-4',
-              maxQueue >= 16
+              maxQueue >= HEAVY_QUEUE
                 ? 'border-[var(--color-amber)]/50 bg-[color-mix(in_oklab,var(--color-amber)_12%,transparent)]'
                 : 'border-[var(--color-line)] bg-black/20',
             ].join(' ')}

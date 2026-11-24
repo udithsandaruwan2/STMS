@@ -1,6 +1,6 @@
 import type { Incident } from '../types'
 
-export const seedIncidents: Incident[] = [
+export const seedIncidents: Omit<Incident, 'junctionId'>[] = [
   {
     id: 'inc-1',
     severity: 'critical',

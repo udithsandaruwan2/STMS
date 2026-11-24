@@ -1,12 +1,12 @@
-import { estimateWait } from '../lib/rules'
-import { useTrafficStore } from '../store/useTrafficStore'
-import type { Direction } from '../types'
-
-const dirs: Direction[] = ['North', 'South', 'East', 'West']
+import { isInFallback, signalAxes } from '../lib/networkSimulation'
+import { estimateWait, HEAVY_QUEUE } from '../lib/rules'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 
 export function TwinPage() {
-  const junction = useTrafficStore((s) => s.junction)
-  const adaptiveMode = useTrafficStore((s) => s.adaptiveMode)
+  const junction = useTrafficStore(selectActiveJunction)
+  const adaptiveMode = junction.adaptive
+  const devices = useTrafficStore((state) => state.devices)
+  const fallback = isInFallback(junction.id, devices)
   const setAdaptiveMode = useTrafficStore((s) => s.setAdaptiveMode)
   const setApproachGreen = useTrafficStore((s) => s.setApproachGreen)
   const setScenario = useTrafficStore((s) => s.setScenario)
@@ -17,17 +17,15 @@ export function TwinPage() {
   const adaptiveWait = estimateWait(north.queueLength, junction.heavyGreenSec)
 
   const applyAdaptiveAll = () => {
-    for (const d of dirs) {
-      const a = junction.approaches.find((x) => x.direction === d)!
-      const secs =
-        a.queueLength >= 14 ? junction.heavyGreenSec : junction.normalGreenSec
-      setApproachGreen(d, secs)
+    for (const axis of signalAxes) {
+      const congested = junction.approaches.some((approach) =>
+        axis.includes(approach.direction) && approach.queueLength >= HEAVY_QUEUE)
+      setApproachGreen(axis[0], congested ? junction.heavyGreenSec : junction.normalGreenSec)
     }
     setAdaptiveMode(true)
   }
 
   const applyFixedAll = () => {
-    for (const d of dirs) setApproachGreen(d, junction.normalGreenSec)
     setAdaptiveMode(false)
   }
 
@@ -37,7 +35,7 @@ export function TwinPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Digital twin — what if</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            Compare fixed vs adaptive green before any real-world change. Demo estimates
+            {junction.name} · Compare fixed and adaptive green. Wait estimates are
             only.
           </p>
         </div>
@@ -51,6 +49,7 @@ export function TwinPage() {
           </button>
           <button
             type="button"
+            disabled={fallback}
             onClick={() => setAdaptiveMode(!adaptiveMode)}
             className={[
               'rounded-lg px-4 py-2 text-sm font-semibold',
@@ -79,10 +78,10 @@ export function TwinPage() {
           </p>
           <button
             type="button"
-            onClick={applyFixedAll}
+            disabled={fallback} onClick={applyFixedAll}
             className="mt-4 rounded-lg border border-[var(--color-line)] px-3 py-2 text-xs text-white hover:bg-white/5"
           >
-            Apply fixed plan to all approaches
+            Apply fixed plan at this junction
           </button>
         </section>
 
@@ -100,7 +99,7 @@ export function TwinPage() {
           </p>
           <button
             type="button"
-            onClick={applyAdaptiveAll}
+            disabled={fallback} onClick={applyAdaptiveAll}
             className="mt-4 rounded-lg bg-[var(--color-mint)] px-3 py-2 text-xs font-semibold text-[#042016]"
           >
             Apply adaptive rules to congested approaches
@@ -125,14 +124,14 @@ export function TwinPage() {
               <div className="flex gap-1">
                 <button
                   type="button"
-                  onClick={() => setApproachGreen(a.direction, junction.normalGreenSec)}
+                  disabled={fallback} onClick={() => setApproachGreen(a.direction, junction.normalGreenSec)}
                   className="rounded-md border border-[var(--color-line)] px-2 py-1 text-[11px] text-white"
                 >
                   {junction.normalGreenSec}s
                 </button>
                 <button
                   type="button"
-                  onClick={() => setApproachGreen(a.direction, junction.heavyGreenSec)}
+                  disabled={fallback} onClick={() => setApproachGreen(a.direction, junction.heavyGreenSec)}
                   className="rounded-md bg-[var(--color-mint)]/20 px-2 py-1 text-[11px] text-[var(--color-mint)]"
                 >
                   {junction.heavyGreenSec}s

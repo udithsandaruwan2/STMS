@@ -1,77 +1,51 @@
-import type { Approach, Direction, Recommendation, ScenarioId } from '../types'
+import type { Approach, Recommendation } from '../types'
 
-const QUEUE_THRESHOLD = 16
+export const HEAVY_QUEUE = 8
 
-export function shouldSuggestHeavyGreen(
-  approach: Approach,
-  _normalGreen: number,
-  heavyGreen: number,
-) {
-  return (
-    approach.queueLength >= QUEUE_THRESHOLD &&
-    approach.greenSeconds < heavyGreen &&
-    approach.direction === 'North'
-  )
+export function shouldSuggestHeavyGreen(approach: Approach, heavyGreen: number) {
+  return approach.queueLength >= HEAVY_QUEUE && approach.greenSeconds < heavyGreen
 }
 
 export function buildRecommendation(
+  junctionId: string,
   approach: Approach,
-  normalGreen: number,
   heavyGreen: number,
+  manual = false,
 ): Recommendation {
-  const confidence = Math.min(
-    97,
-    Math.round(62 + (approach.queueLength - QUEUE_THRESHOLD) * 4 + Math.random() * 8),
-  )
+  const queue = Math.round(approach.queueLength)
   return {
-    id: `rec-${Date.now()}`,
+    id: `rec-${junctionId}-${approach.direction}-${Date.now()}`,
+    junctionId,
     approach: approach.direction,
-    fromSec: normalGreen,
+    fromSec: approach.greenSeconds,
     toSec: heavyGreen,
-    queueLength: Math.round(approach.queueLength),
-    reason: `${approach.direction} queue length ${Math.round(approach.queueLength)} vehicles exceeds threshold ${QUEUE_THRESHOLD}. Suggest extending green within approved safe plan. Pedestrian protect time unchanged.`,
+    queueLength: queue,
+    reason: manual
+      ? `Operator requested a timing comparison for the ${approach.direction} approach. Current queue is ${queue} vehicles.`
+      : `${queue} vehicles are queued on the ${approach.direction} approach. Consider extending green within the demo plan. Pedestrian protection stays in place.`,
     status: 'pending',
     createdAt: new Date().toISOString(),
-    confidence,
+    confidence: Math.min(97, 60 + queue * 3),
   }
 }
 
 export function estimateWait(queue: number, greenSec: number) {
-  const clearance = Math.max(greenSec * 0.55, 8)
-  return Math.max(12, Math.round(queue * 2.4 - clearance * 0.35))
+  if (queue === 0) return 0
+  return Math.max(2, Math.round(queue * 3.7 - greenSec * 0.23))
 }
 
-export function driverMessage(maxQueue: number, pending: boolean): string {
-  if (maxQueue >= 16) {
+export function driverMessage(maxQueue: number, pending: boolean, location: string): string {
+  if (maxQueue >= HEAVY_QUEUE) {
     return pending
-      ? 'Heavy traffic ahead on Galle Road North; consider Marine Drive or another route while operators review signal timing.'
-      : 'Heavy traffic ahead; consider another route.'
+      ? `Heavy traffic near ${location}. Operators are reviewing signal timing. Check alternate routes before travelling.`
+      : `Heavy traffic near ${location}. Consider an alternate route.`
   }
-  if (maxQueue >= 10) {
-    return 'Moderate delays near Bambalapitiya junction. Allow extra travel time.'
-  }
-  return 'Traffic near Bambalapitiya junction is currently light.'
+  if (maxQueue >= 4) return `Moderate delays near ${location}. Allow extra travel time.`
+  return `Traffic near ${location} is currently light.`
 }
 
 export function phaseColor(phase: Approach['phase']) {
-  if (phase === 'green') return '#22c55e'
-  if (phase === 'amber') return '#f59e0b'
-  return '#ef4444'
+  if (phase === 'green') return '#39d99a'
+  if (phase === 'amber') return '#ffc46b'
+  return '#f77971'
 }
-
-export function scenarioQueues(scenario: ScenarioId): Record<Direction, number> {
-  switch (scenario) {
-    case 'morning-peak':
-      return { North: 22, South: 14, East: 9, West: 16 }
-    case 'off-peak':
-      return { North: 5, South: 4, East: 3, West: 4 }
-    case 'incident':
-      return { North: 12, South: 24, East: 8, West: 10 }
-    case 'emergency':
-      return { North: 10, South: 18, East: 7, West: 9 }
-    default:
-      return { North: 18, South: 9, East: 6, West: 11 }
-  }
-}
-
-export type { Direction }

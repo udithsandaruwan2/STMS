@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { junctionSites } from '../data/network'
 import { useTrafficStore } from '../store/useTrafficStore'
 import type { Severity } from '../types'
 
@@ -24,6 +26,7 @@ export function NotificationPanel({
   floating?: boolean
   onClose?: () => void
 }) {
+  const navigate = useNavigate()
   const incidents = useTrafficStore((s) => s.incidents)
   const acknowledgeIncident = useTrafficStore((s) => s.acknowledgeIncident)
   const dismissIncident = useTrafficStore((s) => s.dismissIncident)
@@ -48,7 +51,7 @@ export function NotificationPanel({
     <section
       className={[
         'glass flex h-full min-h-0 flex-col rounded-xl p-4',
-        floating ? 'w-[360px] max-h-[70vh] shadow-2xl' : '',
+        floating ? 'w-[min(360px,calc(100vw-5rem))] max-h-[70vh] shadow-2xl' : '',
       ].join(' ')}
     >
       <div className="mb-3 flex items-center justify-between">
@@ -144,15 +147,17 @@ export function NotificationPanel({
               <span className="font-mono text-[10px] text-[var(--color-muted)]">
                 {new Date(n.timestamp).toLocaleTimeString()}
               </span>
-              {n.approach && (
                 <button
                   type="button"
-                  onClick={() => selectApproach(n.approach!)}
+                  onClick={() => {
+                    selectApproach(n.approach ?? null, n.junctionId)
+                    onClose?.()
+                    navigate('/')
+                  }}
                   className="text-[10px] text-[var(--color-mint)] hover:underline"
                 >
-                  Focus {n.approach}
+                  {junctionSites.find((site) => site.id === n.junctionId)?.name}{n.approach ? ` · ${n.approach}` : ''}
                 </button>
-              )}
               {!n.acknowledged && (
                 <button
                   type="button"

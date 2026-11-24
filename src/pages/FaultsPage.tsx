@@ -1,5 +1,6 @@
 import { Camera, Cpu, Navigation, Radio } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { junctionSites } from '../data/network'
 import { useTrafficStore } from '../store/useTrafficStore'
 import type { DeviceStatus, DeviceType } from '../types'
 
@@ -24,6 +25,7 @@ export function FaultsPage() {
   const openCamera = useTrafficStore((s) => s.openCamera)
   const selectDevice = useTrafficStore((s) => s.selectDevice)
   const selectedDeviceId = useTrafficStore((s) => s.selectedDeviceId)
+  const [siteFilter, setSiteFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState<'all' | DeviceType>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | DeviceStatus>('all')
 
@@ -31,10 +33,11 @@ export function FaultsPage() {
     () =>
       devices.filter(
         (d) =>
+          (siteFilter === 'all' || d.junctionId === siteFilter) &&
           (typeFilter === 'all' || d.type === typeFilter) &&
           (statusFilter === 'all' || d.status === statusFilter),
       ),
-    [devices, typeFilter, statusFilter],
+    [devices, siteFilter, typeFilter, statusFilter],
   )
 
   return (
@@ -43,8 +46,7 @@ export function FaultsPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Roadside equipment</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            Device health for the Colombo pilot junction. Faults update the Monitor fallback
-            banner.
+            Device health across the Colombo demo network. Controller faults activate a local fixed plan.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -66,6 +68,12 @@ export function FaultsPage() {
       </div>
 
       <div className="flex flex-wrap gap-2">
+        <select aria-label="Filter equipment by junction" value={siteFilter}
+          onChange={(event) => setSiteFilter(event.target.value)}
+          className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5 text-xs text-white">
+          <option value="all">All junctions</option>
+          {junctionSites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+        </select>
         {(['all', 'camera', 'sensor', 'gps', 'controller'] as const).map((t) => (
           <button
             key={t}
@@ -99,6 +107,7 @@ export function FaultsPage() {
         ))}
       </div>
 
+      {visible.length === 0 && <p className="text-sm text-[var(--color-muted)]">No devices match these filters.</p>}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {visible.map((d) => {
           const Icon = icons[d.type]

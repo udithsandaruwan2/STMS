@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { useTrafficStore } from '../store/useTrafficStore'
+import { junctionSites } from '../data/network'
+import { isInFallback } from '../lib/networkSimulation'
+import { selectActiveJunction, useTrafficStore } from '../store/useTrafficStore'
 import type { Direction } from '../types'
 
 const dirs: Direction[] = ['North', 'South', 'East', 'West']
@@ -8,10 +10,12 @@ export function ControlPage() {
   const recommendations = useTrafficStore((s) => s.recommendations)
   const reviewRecommendation = useTrafficStore((s) => s.reviewRecommendation)
   const requestAiSuggestion = useTrafficStore((s) => s.requestAiSuggestion)
-  const junction = useTrafficStore((s) => s.junction)
+  const junction = useTrafficStore(selectActiveJunction)
   const setApproachGreen = useTrafficStore((s) => s.setApproachGreen)
   const setApproachPhase = useTrafficStore((s) => s.setApproachPhase)
-  const adaptiveMode = useTrafficStore((s) => s.adaptiveMode)
+  const adaptiveMode = junction.adaptive
+  const devices = useTrafficStore((state) => state.devices)
+  const fallback = isInFallback(junction.id, devices)
   const setAdaptiveMode = useTrafficStore((s) => s.setAdaptiveMode)
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [manualDir, setManualDir] = useState<Direction>('North')
@@ -22,13 +26,14 @@ export function ControlPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Intelligent decision review</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            AI suggestions require human approval. Illustrative timings only (
+            {junction.name} · Timing suggestions require approval (
             {junction.normalGreenSec}s → {junction.heavyGreenSec}s).
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
+            disabled={fallback}
             onClick={() => setAdaptiveMode(!adaptiveMode)}
             className="rounded-lg border border-[var(--color-line)] px-3 py-2 text-xs text-white hover:bg-white/5"
           >
@@ -36,18 +41,22 @@ export function ControlPage() {
           </button>
           <button
             type="button"
-            onClick={() => requestAiSuggestion('North')}
+            disabled={fallback}
+            onClick={() => requestAiSuggestion(manualDir)}
             className="rounded-lg bg-[var(--color-mint)] px-3 py-2 text-xs font-semibold text-[#042016]"
           >
-            Request AI suggestion
+            Request timing suggestion
           </button>
         </div>
       </div>
 
       <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
         <h2 className="text-sm font-semibold text-white">Manual override (demo)</h2>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <p className="mt-1 text-xs text-slate-400">Opposing approaches share a green duration. Manual phase requests wait for clearance.</p>
+        {fallback && <p className="mt-2 text-xs text-amber-200">This junction is on fixed fallback. Restore equipment to change timing.</p>}
+        <fieldset disabled={fallback} className="mt-3 flex flex-wrap items-center gap-2 disabled:opacity-50">
           <select
+            aria-label="Manual approach"
             value={manualDir}
             onChange={(e) => setManualDir(e.target.value as Direction)}
             className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel-2)] px-3 py-2 text-sm text-white"
@@ -79,10 +88,10 @@ export function ControlPage() {
               onClick={() => setApproachPhase(manualDir, p)}
               className="rounded-lg border border-[var(--color-line)] px-3 py-2 text-xs capitalize text-white hover:bg-white/5"
             >
-              Phase {p}
+              Request {p}
             </button>
           ))}
-        </div>
+        </fieldset>
       </section>
 
       <div className="space-y-3">
@@ -100,7 +109,7 @@ export function ControlPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-xs tracking-wide text-[var(--color-mint)] uppercase">
-                  Signal timing suggestion
+                  {junctionSites.find((site) => site.id === r.junctionId)?.name} · Signal timing suggestion
                 </div>
                 <h2 className="mt-1 text-lg font-semibold text-white">
                   {r.approach} approach: {r.fromSec}s → {r.toSec}s green
@@ -162,6 +171,7 @@ export function ControlPage() {
                   <button
                     type="button"
                     className="rounded-lg bg-[var(--color-mint)] px-4 py-2 text-sm font-semibold text-[#042016]"
+                    disabled={isInFallback(r.junctionId, devices)}
                     onClick={() =>
                       reviewRecommendation(
                         r.id,
